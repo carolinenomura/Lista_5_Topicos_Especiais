@@ -11,18 +11,17 @@
 struct Opcoes {
     int maxdepth;       /* -1 = sem limite */
     int mindepth;
-    char *name_pat;     /* -name  (NULL = não usado) */
-    char *iname_pat;    /* -iname (NULL = não usado) */
-    char tipo;          /* -type: f, d, l... (0 = não usado) */
-    int so_vazio;       /* -empty (1 = usado) */
+    char *name_pattern;     /* -name  (NULL = não usado) */
+    char *iname_pattern;    /* -iname (NULL = não usado) */
+    char type;          /* -type: f, d, l... (0 = não usado) */
+    int empty;          /* -empty (1 = usado) */
     char *size_arg;     /* -size  guarda o texto, ex: "+10k" */
     char *mtime_arg;    /* -mtime guarda o texto, ex: "-3" */
 };
  
 int deu_erro = 0;       /* vira 1 se algum erro acontecer */
 
-
-/* =============== A fazer =============== */
+/* =============== A FAZER =============== */
  
 /* Devolve 1 se o arquivo passa no -size (ou se -size não foi usado) */
 int testa_size(struct Opcoes *op, struct stat *st)
@@ -38,29 +37,27 @@ int testa_mtime(struct Opcoes *op, struct stat *st)
     return 1;
 }
  
- 
 /* Devolve 1 se o NOME passa no -name e no -iname */
 int testa_name(struct Opcoes *op, char *nome)
 {
-    if (op->name_pat == NULL && op->iname_pat == NULL) return 1;
+    if (op->name_pattern == NULL && op->iname_pattern == NULL) return 1;
     return 1;
 }
  
 /* Devolve 1 se o arquivo passa no -type */
 int testa_type(struct Opcoes *op, struct stat *st)
 {
-    if (op->tipo == 0) return 1;
+    if (op->type == 0) return 1;
     return 1;
 }
  
 /* Devolve 1 se o arquivo passa no -empty */
 int testa_empty(struct Opcoes *op, char *caminho, struct stat *st)
 {
-    if (op->so_vazio == 0) return 1;
+    if (op->empty == 0) return 1;
     return 1;
 }
 
- 
 /* Percorre um caminho. Se for pasta, entra nela. */
 void percorre(struct Opcoes *op, char *caminho, int nivel)
 {
@@ -136,10 +133,10 @@ int main(int argc, char *argv[])
     struct Opcoes op;
     op.maxdepth = -1;
     op.mindepth = 0;
-    op.name_pat = NULL;
-    op.iname_pat = NULL;
-    op.tipo = 0;
-    op.so_vazio = 0;
+    op.name_pattern = NULL;
+    op.iname_pattern = NULL;
+    op.type = 0;
+    op.empty = 0;
     op.size_arg = NULL;
     op.mtime_arg = NULL;
  
@@ -158,7 +155,7 @@ int main(int argc, char *argv[])
             /* já é o comportamento padrão */
         }
         else if (strcmp(opcao, "-empty") == 0) {
-            op.so_vazio = 1;
+            op.empty = 1;
         }
         else if (strcmp(opcao, "-name") == 0 || strcmp(opcao, "-iname") == 0
               || strcmp(opcao, "-type") == 0 || strcmp(opcao, "-size") == 0
@@ -172,8 +169,8 @@ int main(int argc, char *argv[])
             }
             char *valor = argv[i + 1];
  
-            if (strcmp(opcao, "-name") == 0)  op.name_pat = valor;
-            if (strcmp(opcao, "-iname") == 0) op.iname_pat = valor;
+            if (strcmp(opcao, "-name") == 0)  op.name_pattern = valor;
+            if (strcmp(opcao, "-iname") == 0) op.iname_pattern = valor;
             if (strcmp(opcao, "-size") == 0)  op.size_arg = valor;
             if (strcmp(opcao, "-mtime") == 0) op.mtime_arg = valor;
  
@@ -182,7 +179,7 @@ int main(int argc, char *argv[])
                     fprintf(stderr, "find: Unknown argument to -type: %s\n", valor);
                     return 1;
                 }
-                op.tipo = valor[0];
+                op.type = valor[0];
             }
  
             if (strcmp(opcao, "-maxdepth") == 0 || strcmp(opcao, "-mindepth") == 0) {
