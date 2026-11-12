@@ -105,8 +105,12 @@ int testa_empty(struct Opcoes *op, char *caminho, struct stat *st)
     /* pasta: vazia se não tem nada além de "." e ".." */
     if (S_ISDIR(st->st_mode)) {
         DIR *pasta = opendir(caminho);
-        if (pasta == NULL)
-            return 0;   /* se não deu pra abrir, o percorre() mostra o erro quando tentar entrar */
+        if (pasta == NULL) {
+            /* o find real também mostra o erro aqui (e de novo quando tenta entrar na pasta) */
+            fprintf(stderr, "find: ‘%s’: %s\n", caminho, strerror(errno));
+            deu_erro = 1;
+            return 0;
+        }
 
         int vazia = 1;
         struct dirent *item;
@@ -296,6 +300,8 @@ int main(int argc, char *argv[])
     int primeira = 1;
     int qtd_pastas = i - 1;
  
+    char *ultima_opcao = NULL;  /* última opção lida (usada numa dica de erro mais abaixo) */
+
     /* le as opções que o usuario escreveu no comando */
     while (i < argc) {
         char *opcao = argv[i];
@@ -356,8 +362,16 @@ int main(int argc, char *argv[])
         }
         else {
             fprintf(stderr, "find: paths must precede expression: `%s'\n", opcao);
+
+            /* o find real acrescenta uma dica quando o argumento perdido existe de verdade.
+               É o que acontece quando o shell expande um padrão sem aspas:
+               find . -name *.txt  vira  find . -name a.txt b.txt */
+            struct stat st_dica;
+            if (ultima_opcao != NULL && stat(opcao, &st_dica) == 0)
+                fprintf(stderr, "find: possible unquoted pattern after predicate `%s'?\n", ultima_opcao);
             return 1;
         }
+        ultima_opcao = opcao;
         i++;
     }
  
