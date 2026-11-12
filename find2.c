@@ -1,3 +1,4 @@
+#define _GNU_SOURCE     /* necessário pro FNM_CASEFOLD (-iname) e pras macros S_ISSOCK/S_ISLNK */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,44 +19,83 @@ struct Opcoes {
     char *size_arg;     /* -size  guarda o texto, ex: "+10k" */
     char *mtime_arg;    /* -mtime guarda o texto, ex: "-3" */
 };
- 
+
 int deu_erro = 0;       /* vira 1 se algum erro acontecer */
 
-/* =============== A FAZER =============== */
- 
+/* =============== TESTES DE CADA OPÇÃO =============== */
+
 /* Devolve 1 se o arquivo passa no -size (ou se -size não foi usado) */
 int testa_size(struct Opcoes *op, struct stat *st)
 {
     if (op->size_arg == NULL) return 1;
-    return 1;
+    return 1;       /* AINDA NÃO IMPLEMENTADO: aceita tudo */
 }
- 
+
 /* Devolve 1 se o arquivo passa no -mtime (ou se -mtime não foi usado) */
 int testa_mtime(struct Opcoes *op, struct stat *st)
 {
     if (op->mtime_arg == NULL) return 1;
-    return 1;
+    return 1;       /* AINDA NÃO IMPLEMENTADO: aceita tudo */
 }
- 
+
 /* Devolve 1 se o NOME passa no -name e no -iname */
 int testa_name(struct Opcoes *op, char *nome)
 {
-    if (op->name_pattern == NULL && op->iname_pattern == NULL) return 1;
+    /* fnmatch devolve 0 quando o nome combina com o padrão (*, ?, [abc]) */
+    if (op->name_pattern != NULL && fnmatch(op->name_pattern, nome, 0) != 0)
+        return 0;
+    /* FNM_CASEFOLD = ignora maiúscula/minúscula */
+    if (op->iname_pattern != NULL && fnmatch(op->iname_pattern, nome, FNM_CASEFOLD) != 0)
+        return 0;
     return 1;
 }
- 
+
 /* Devolve 1 se o arquivo passa no -type */
 int testa_type(struct Opcoes *op, struct stat *st)
 {
     if (op->type == 0) return 1;
-    return 1;
+
+    switch (op->type) {
+        case 'f': return S_ISREG(st->st_mode)  != 0;
+        case 'd': return S_ISDIR(st->st_mode)  != 0;
+        case 'l': return S_ISLNK(st->st_mode)  != 0;
+        case 'b': return S_ISBLK(st->st_mode)  != 0;
+        case 'c': return S_ISCHR(st->st_mode)  != 0;
+        case 'p': return S_ISFIFO(st->st_mode) != 0;
+        case 's': return S_ISSOCK(st->st_mode) != 0;
+    }
+    return 0;
 }
- 
+
 /* Devolve 1 se o arquivo passa no -empty */
 int testa_empty(struct Opcoes *op, char *caminho, struct stat *st)
 {
     if (op->empty == 0) return 1;
-    return 1;
+
+    /* arquivo comum: vazio se tem 0 bytes */
+    if (S_ISREG(st->st_mode))
+        return st->st_size == 0;
+
+    /* pasta: vazia se não tem nada além de "." e ".." */
+    if (S_ISDIR(st->st_mode)) {
+        DIR *pasta = opendir(caminho);
+        if (pasta == NULL)
+            return 0;   /* se não deu pra abrir, o percorre() mostra o erro quando tentar entrar */
+
+        int vazia = 1;
+        struct dirent *item;
+        while ((item = readdir(pasta)) != NULL) {
+            if (strcmp(item->d_name, ".") == 0 || strcmp(item->d_name, "..") == 0)
+                continue;
+            vazia = 0;
+            break;
+        }
+        closedir(pasta);
+        return vazia;
+    }
+
+    /* link, socket, etc.: o find nunca considera vazio */
+    return 0;
 }
 
 /* Percorre um caminho. Se for pasta, entra nela. */
@@ -69,9 +109,21 @@ void percorre(struct Opcoes *op, char *caminho, int nivel)
         return;
     }
  
-    /* pega só o nome final: "pasta/a.txt" -> "a.txt" */
-    char *nome = strrchr(caminho, '/');
-    if (nome == NULL) nome = caminho;
+    /* pega só o nome final: "pasta/a.txt" -> "a.txt".
+       Se o caminho termina com barra ("pasta/"), o find ignora as barras do fim
+       e usa "pasta" como nome, por isso trabalho numa cópia. */
+    char *copia = strdup(caminho);
+    if (copia == NULL) {
+        perror("find");
+        deu_erro = 1;
+        return;
+    }
+    size_t tam = strlen(copia);
+    while (tam > 1 && copia[tam - 1] == '/')
+        copia[--tam] = '\0';
+
+    char *nome = strrchr(copia, '/');
+    if (nome == NULL || tam == 1) nome = copia;     /* tam == 1 é o caso do "/" */
     else nome = nome + 1;
  
     /* só imprime se passar em todos os testes */
@@ -83,6 +135,7 @@ void percorre(struct Opcoes *op, char *caminho, int nivel)
         && testa_mtime(op, &st)) {
         printf("%s\n", caminho);
     }
+    free(copia);
  
     /* se não é pasta, acabou */
     if (!S_ISDIR(st.st_mode)) return;
@@ -139,7 +192,7 @@ int main(int argc, char *argv[])
     op.empty = 0;
     op.size_arg = NULL;
     op.mtime_arg = NULL;
- 
+
     /* le as pastas que o usuario escreveu no comando */
     int i = 1;
     while (i < argc && argv[i][0] != '-')
