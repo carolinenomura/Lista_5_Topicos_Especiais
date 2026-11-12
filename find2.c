@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <fnmatch.h>
+#include <limits.h>
 #include <time.h>
 #include <sys/stat.h>
 
@@ -16,11 +17,20 @@ struct Opcoes {
     char *iname_pattern;    /* -iname (NULL = não usado) */
     char type;          /* -type: f, d, l... (0 = não usado) */
     int empty;          /* -empty (1 = usado) */
-    char *size_arg;     /* -size  guarda o texto, ex: "+10k" */
-    char *mtime_arg;    /* -mtime guarda o texto, ex: "-3" */
+    char *size_arg;     /* -size  guarda o texto, ex: "+10k" (NULL = não usado) */
+    char *mtime_arg;    /* -mtime guarda o texto, ex: "-3"   (NULL = não usado) */
+
+    /* o texto do -size e do -mtime já é convertido uma vez só, no main,
+       pra não precisar interpretar de novo a cada arquivo */
+    char size_cmp;          /* '+' (maior), '-' (menor) ou '=' (igual) */
+    long long size_n;       /* o número: em "+10k" é o 10 */
+    long long size_unidade; /* quantos bytes vale a unidade: c=1 w=2 b=512 k=1024 M=1024^2 G=1024^3 */
+    char mtime_cmp;         /* '+', '-' ou '=' */
+    long long mtime_n;      /* o número de dias */
 };
 
 int deu_erro = 0;       /* vira 1 se algum erro acontecer */
+time_t hora_inicio;     /* hora em que o programa começou (o -mtime conta a partir dela) */
 
 /* =============== TESTES DE CADA OPÇÃO =============== */
 
@@ -28,14 +38,30 @@ int deu_erro = 0;       /* vira 1 se algum erro acontecer */
 int testa_size(struct Opcoes *op, struct stat *st)
 {
     if (op->size_arg == NULL) return 1;
-    return 1;       /* AINDA NÃO IMPLEMENTADO: aceita tudo */
+
+    /* tamanho em unidades, arredondando pra cima (igual ao find):
+       com "k", um arquivo de 1 byte ou de 1024 bytes vale 1; um de 1025 vale 2 */
+    long long tamanho = (st->st_size + op->size_unidade - 1) / op->size_unidade;
+
+    if (op->size_cmp == '+') return tamanho > op->size_n;
+    if (op->size_cmp == '-') return tamanho < op->size_n;
+    return tamanho == op->size_n;
 }
 
 /* Devolve 1 se o arquivo passa no -mtime (ou se -mtime não foi usado) */
 int testa_mtime(struct Opcoes *op, struct stat *st)
 {
     if (op->mtime_arg == NULL) return 1;
-    return 1;       /* AINDA NÃO IMPLEMENTADO: aceita tudo */
+
+    /* há quantos segundos o arquivo foi modificado, e quantos dias inteiros isso dá */
+    long long idade = (long long)hora_inicio - (long long)st->st_mtime;
+    long long dias = idade / 86400;
+    if (idade < 0 && idade % 86400 != 0)
+        dias--;     /* arquivo "do futuro": arredonda pra baixo mesmo */
+
+    if (op->mtime_cmp == '+') return dias > op->mtime_n;
+    if (op->mtime_cmp == '-') return dias < op->mtime_n;
+    return dias == op->mtime_n;
 }
 
 /* Devolve 1 se o NOME passa no -name e no -iname */
@@ -181,6 +207,74 @@ int para_numero(char *texto)
     return atoi(texto);
 }
 
+/* Lê um número com sinal opcional ("+10", "-3" ou "5"), usando só os 'tam'
+   primeiros caracteres do texto. Em *cmp guarda '+', '-' ou '='.
+   Devolve 1 se é válido, 0 se não é. */
+int le_numero(char *texto, size_t tam, char *cmp, long long *n)
+{
+    size_t i = 0;
+    *cmp = '=';
+    if (i < tam && (texto[i] == '+' || texto[i] == '-')) {
+        *cmp = texto[i];
+        i++;
+    }
+    if (i >= tam) return 0;     /* não sobrou nenhum dígito */
+
+    *n = 0;
+    for (; i < tam; i++) {
+        if (texto[i] < '0' || texto[i] > '9') return 0;
+        if (*n > (LLONG_MAX - 9) / 10) return 0;    /* número grande demais */
+        *n = *n * 10 + (texto[i] - '0');
+    }
+    return 1;
+}
+
+/* Interpreta o argumento do -size (ex: "+10k") e guarda no struct.
+   Se for inválido, mostra o mesmo erro do find e devolve 0. */
+int le_size(char *arg, struct Opcoes *op)
+{
+    size_t tam = strlen(arg);
+    if (tam == 0) {
+        fprintf(stderr, "find: invalid null argument to -size\n");
+        return 0;
+    }
+
+    /* o último caractere diz a unidade; se for dígito, a unidade padrão é "b" (512 bytes) */
+    char ultimo = arg[tam - 1];
+    switch (ultimo) {
+        case 'b': op->size_unidade = 512;        tam--; break;
+        case 'c': op->size_unidade = 1;          tam--; break;
+        case 'w': op->size_unidade = 2;          tam--; break;
+        case 'k': op->size_unidade = 1024;       tam--; break;
+        case 'M': op->size_unidade = 1048576;    tam--; break;
+        case 'G': op->size_unidade = 1073741824; tam--; break;
+        default:
+            if (ultimo >= '0' && ultimo <= '9') {
+                op->size_unidade = 512;
+                break;
+            }
+            fprintf(stderr, "find: invalid -size type `%c'\n", ultimo);
+            return 0;
+    }
+
+    if (!le_numero(arg, tam, &op->size_cmp, &op->size_n)) {
+        fprintf(stderr, "find: Invalid argument `%s' to -size\n", arg);
+        return 0;
+    }
+    return 1;
+}
+
+/* Interpreta o argumento do -mtime (ex: "-3") e guarda no struct.
+   Se for inválido, mostra o mesmo erro do find e devolve 0. */
+int le_mtime(char *arg, struct Opcoes *op)
+{
+    if (!le_numero(arg, strlen(arg), &op->mtime_cmp, &op->mtime_n)) {
+        fprintf(stderr, "find: invalid argument `%s' to `-mtime'\n", arg);
+        return 0;
+    }
+    return 1;
+}
+
 int main(int argc, char *argv[])
 {
     struct Opcoes op;
@@ -193,6 +287,8 @@ int main(int argc, char *argv[])
     op.size_arg = NULL;
     op.mtime_arg = NULL;
 
+    hora_inicio = time(NULL);
+ 
     /* le as pastas que o usuario escreveu no comando */
     int i = 1;
     while (i < argc && argv[i][0] != '-')
@@ -224,8 +320,15 @@ int main(int argc, char *argv[])
  
             if (strcmp(opcao, "-name") == 0)  op.name_pattern = valor;
             if (strcmp(opcao, "-iname") == 0) op.iname_pattern = valor;
-            if (strcmp(opcao, "-size") == 0)  op.size_arg = valor;
-            if (strcmp(opcao, "-mtime") == 0) op.mtime_arg = valor;
+
+            if (strcmp(opcao, "-size") == 0) {
+                if (!le_size(valor, &op)) return 1;
+                op.size_arg = valor;
+            }
+            if (strcmp(opcao, "-mtime") == 0) {
+                if (!le_mtime(valor, &op)) return 1;
+                op.mtime_arg = valor;
+            }
  
             if (strcmp(opcao, "-type") == 0) {
                 if (strlen(valor) != 1 || strchr("bcdpfls", valor[0]) == NULL) {
